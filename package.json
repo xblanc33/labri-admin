@@ -1,0 +1,24 @@
+{
+  "name": "labri-admin",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:server": "node src/server.js",
+    "dev:frontend": "vite",
+    "build:frontend": "vite build",
+    "preview:frontend": "vite preview"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "pg": "^8.11.5",
+    "dotenv": "^16.4.5",
+    "vue": "^3.4.21",
+    "vue-router": "^4.3.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "vite": "^6.0.7"
+  }
+}

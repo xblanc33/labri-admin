@@ -1,0 +1,21 @@
+# Node / backend
+node_modules/
+dist/
+
+# Env files
+.env
+.env.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS artifacts
+.DS_Store
+.idea/
+.vscode/
+
+# Frontend build cache
+frontend/node_modules/
