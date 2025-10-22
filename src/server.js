@@ -7,6 +7,8 @@ const morgan = require("morgan");
 const cors = require("cors");
 const { Pool } = require("pg");
 const { createLaboratoriesRouter } = require("./laboratoriesRouter");
+const { createPersonnesRouter } = require("./personnesRouter");
+const { createStructuresRouter } = require("./structuresRouter");
 
 const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/labri_admin";
@@ -23,6 +25,30 @@ app.use(express.json());
 app.use(morgan("dev"));
 
 app.use("/laboratoires", createLaboratoriesRouter(pool));
+app.use("/personnes", createPersonnesRouter(pool));
+app.use("/structures", createStructuresRouter(pool));
+
+app.get("/sexes", async (_req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, sexe FROM sexes ORDER BY id"
+    );
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/nationalites", async (_req, res, next) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, nationalite FROM nationalites ORDER BY nationalite"
+    );
+    res.json(rows);
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/etablissements", async (_req, res, next) => {
   try {

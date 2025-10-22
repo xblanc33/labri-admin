@@ -4,7 +4,8 @@
       <h1>Administration LaBRI</h1>
       <nav>
         <RouterLink to="/">Accueil</RouterLink>
-        <RouterLink to="/laboratories">Laboratoires</RouterLink>
+        <RouterLink to="/structures">Structures</RouterLink>
+        <RouterLink to="/personnes">Personnes</RouterLink>
       </nav>
     </header>
 
