@@ -3,6 +3,7 @@ import HomeView from "../views/HomeView.vue";
 import StructuresView from "../views/StructuresView.vue";
 import StructureDetailView from "../views/StructureDetailView.vue";
 import PersonnesView from "../views/PersonnesView.vue";
+import PersonneDetailView from "../views/PersonneDetailView.vue";
 
 const routes = [
   {
@@ -25,6 +26,12 @@ const routes = [
     path: "/personnes",
     name: "personnes",
     component: PersonnesView,
+  },
+  {
+    path: "/personnes/:personneId",
+    name: "personnes-detail",
+    component: PersonneDetailView,
+    props: true,
   },
 ];
 

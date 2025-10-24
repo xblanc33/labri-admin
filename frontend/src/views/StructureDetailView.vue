@@ -74,8 +74,16 @@
             </thead>
             <tbody>
               <tr v-for="personne in personnes" :key="personne.id">
-                <td>{{ personne.nom }}</td>
-                <td>{{ personne.prenom }}</td>
+                <td>
+                  <RouterLink :to="`/personnes/${personne.id}`">
+                    {{ personne.nom }}
+                  </RouterLink>
+                </td>
+                <td>
+                  <RouterLink :to="`/personnes/${personne.id}`">
+                    {{ personne.prenom }}
+                  </RouterLink>
+                </td>
                 <td>{{ renderSexe(personne.sexe) }}</td>
                 <td>{{ personne.nationalite_nom || "—" }}</td>
                 <td>{{ formatDate(personne.date_naissance) }}</td>

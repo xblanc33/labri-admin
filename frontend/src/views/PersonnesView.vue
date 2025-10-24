@@ -48,8 +48,16 @@
         </thead>
         <tbody>
           <tr v-for="personne in personnes" :key="personne.id">
-            <td>{{ personne.nom }}</td>
-            <td>{{ personne.prenom }}</td>
+            <td>
+              <RouterLink :to="`/personnes/${personne.id}`">
+                {{ personne.nom }}
+              </RouterLink>
+            </td>
+            <td>
+              <RouterLink :to="`/personnes/${personne.id}`">
+                {{ personne.prenom }}
+              </RouterLink>
+            </td>
             <td>{{ renderSexe(personne.sexe) }}</td>
             <td>
               {{
@@ -136,10 +144,18 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, onMounted, defineProps, watch } from "vue";
+import { RouterLink } from "vue-router";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+
+const props = defineProps({
+  period: {
+    type: Object,
+    default: () => ({ start: "", end: "" }),
+  },
+});
 
 const personnes = ref([]);
 const nationalites = ref([]);
@@ -163,6 +179,15 @@ const form = reactive({
   date_naissance: "",
 });
 
+function normalizeDate(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
 async function fetchJSON(url, options) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -183,6 +208,14 @@ async function loadPersonnes() {
     }
     if (selectedLaboratoire.value) {
       params.set("laboratoire", selectedLaboratoire.value);
+    }
+    const start = normalizeDate(props.period?.start);
+    const end = normalizeDate(props.period?.end);
+    if (start) {
+      params.set("start", start);
+    }
+    if (end) {
+      params.set("end", end);
     }
     const query = params.toString() ? `?${params.toString()}` : "";
     personnes.value = await fetchJSON(`${API_BASE}/personnes${query}`);
@@ -346,6 +379,13 @@ const debouncedRefresh = debounce(loadPersonnes, 300);
 onMounted(async () => {
   await Promise.all([loadCatalogs(), loadPersonnes()]);
 });
+
+watch(
+  () => [props.period?.start, props.period?.end],
+  () => {
+    loadPersonnes();
+  }
+);
 </script>
 
 <style scoped>

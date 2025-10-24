@@ -26,6 +26,64 @@ function createLaboratoriesRouter(pool) {
     }
   });
 
+  router.get("/:laboratoireId/affectations", async (req, res, next) => {
+    const laboratoireId = parseInt(req.params.laboratoireId, 10);
+    if (Number.isNaN(laboratoireId)) {
+      return res.status(400).json({ error: "Invalid laboratoire id" });
+    }
+
+    const isISODate = (value) =>
+      typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+
+    const start = isISODate(req.query.start) ? req.query.start : null;
+    const end = isISODate(req.query.end) ? req.query.end : null;
+
+    const params = [laboratoireId];
+    const conditions = ["al.laboratoire = $1"];
+
+    if (end) {
+      params.push(end);
+      conditions.push(`al.date_debut <= $${params.length}`);
+    }
+
+    if (start) {
+      params.push(start);
+      conditions.push(
+        `(fal.date_fin IS NULL OR fal.date_fin >= $${params.length})`
+      );
+    }
+
+    const whereClause = conditions.length
+      ? `WHERE ${conditions.join(" AND ")}`
+      : "";
+
+    try {
+      const { rows } = await pool.query(
+        `SELECT al.id,
+                al.personne,
+                p.nom,
+                p.prenom,
+                p.sexe,
+                p.nationalite,
+                n.nationalite AS nationalite_nom,
+                p.date_naissance,
+                al.date_debut,
+                fal.date_fin
+         FROM affectations_laboratoires al
+         JOIN personnes p ON p.id = al.personne
+         LEFT JOIN nationalites n ON n.id = p.nationalite
+         LEFT JOIN fin_affectations_laboratoires fal
+           ON fal.affectation_laboratoire = al.id
+         ${whereClause}
+         ORDER BY al.date_debut`,
+        params
+      );
+      res.json(rows);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post("/", async (req, res, next) => {
     const { nom, acronyme, numero, date_creation } = req.body || {};
     if (!nom || !acronyme || typeof numero !== "number" || !date_creation) {

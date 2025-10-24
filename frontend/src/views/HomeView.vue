@@ -89,10 +89,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, defineProps, watch } from "vue";
 
 const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+
+const props = defineProps({
+  period: {
+    type: Object,
+    default: () => ({ start: "", end: "" }),
+  },
+});
 
 const laboratoires = ref([]);
 const stats = ref(null);
@@ -110,6 +117,16 @@ async function fetchJSON(url) {
   return response.json();
 }
 
+function normalizeDate(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
+
 async function loadData() {
   loading.value = true;
   error.value = "";
@@ -118,13 +135,25 @@ async function loadData() {
     laboratoires.value = await fetchJSON(`${API_BASE}/laboratoires`);
     if (laboratoires.value.length) {
       const lab = laboratoires.value[0];
-      const [personnes, structures, tutelles] = await Promise.all([
-        fetchJSON(`${API_BASE}/personnes?laboratoire=${lab.id}`),
+      const today = normalizeDate(new Date());
+      const periodStart =
+        normalizeDate(props.period?.start) ||
+        normalizeDate(lab.date_creation) ||
+        today;
+      const periodEnd = normalizeDate(props.period?.end) || today;
+      const params = new URLSearchParams();
+      if (periodStart) params.set("start", periodStart);
+      if (periodEnd) params.set("end", periodEnd);
+      const affectationsUrl = `${API_BASE}/laboratoires/${lab.id}/affectations${
+        params.toString() ? `?${params.toString()}` : ""
+      }`;
+      const [affectations, structures, tutelles] = await Promise.all([
+        fetchJSON(affectationsUrl),
         fetchJSON(`${API_BASE}/laboratoires/${lab.id}/structures`),
         fetchJSON(`${API_BASE}/laboratoires/${lab.id}/tutelles`),
       ]);
       stats.value = {
-        personnes: personnes.length,
+        personnes: new Set(affectations.map((aff) => aff.personne)).size,
         structures: structures.length,
         tutelles: tutelles.length,
       };
@@ -152,6 +181,15 @@ function formatDate(value) {
 onMounted(() => {
   loadData();
 });
+
+watch(
+  () => [props.period?.start, props.period?.end],
+  () => {
+    if (laboratoires.value.length) {
+      loadData();
+    }
+  }
+);
 </script>
 
 <style scoped>
