@@ -96,6 +96,18 @@ INSERT INTO corps_biatss (id, corps) VALUES
   (5, 'IR')
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO baps (id, bap) VALUES
+  (1, 'BAP A'),
+  (2, 'BAP B'),
+  (3, 'BAP C'),
+  (4, 'BAP D'),
+  (5, 'BAP E'),
+  (6, 'BAP F'),
+  (7, 'BAP G'),
+  (8, 'BAP H'),
+  (9, 'BAP J')
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO categories_financements_theses (id, categorie, description) VALUES
   (1, 'CD', 'Financement d''état'),
   (2, 'CDCOL', 'Collectivités territoriales (dont financement régionaux)'),

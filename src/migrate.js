@@ -533,6 +533,312 @@ async function affectation_structures_doctorants() {
     }
 }
 
+async function emplois_enseignants_chercheurs() {
+    // For all membres with type_emploi 'enseignant-chercheur', create an emploi in the new database
+    const query = `SELECT m.nom, m.prenom, te.type_emploi, g.grade, c.corp, e.etablissement
+        FROM membres m
+        JOIN types_emploi te ON m.type_emploi = te.id
+        JOIN grades g ON m.grade = g.id
+        JOIN corps c ON m.corps = c.id
+        JOIN etablissements e ON m.etablissement = e.id
+        WHERE te.type_emploi = 'Enseignant Chercheur titulaire';`;
+    const { rows } = await old_client.query(query);
+    for (const row of rows) {
+        // get personne id
+        const checkQuery = `
+            SELECT id FROM personnes
+            WHERE UPPER(nom) = UPPER($1) AND UPPER(prenom) = UPPER($2)
+        `;
+        const existingPerson = await new_client.query(checkQuery, [row.nom, row.prenom]);
+        if (existingPerson.rows.length > 0) {
+            const personne_id = existingPerson.rows[0].id;
+
+            const lastAffectationQuery = `
+                SELECT id, date_debut FROM affectations_laboratoires
+                WHERE personne = $1 AND laboratoire = 1
+                ORDER BY date_debut DESC
+                LIMIT 1
+            `;
+            const lastAffectation = await new_client.query(lastAffectationQuery, [personne_id]);
+
+            if (lastAffectation.rows.length === 0) {
+                console.log(`No affectation_laboratoire found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+
+            // get etablissement id
+            let etablissement_id = null;
+            if (row.etablissement) {
+                console.log(`Looking up etablissement: ${row.etablissement}`);
+                const etabQuery = `SELECT id FROM etablissements WHERE UPPER(etablissement) = UPPER($1)`;
+                const etabResult = await new_client.query(etabQuery, [row.etablissement]);
+                if (etabResult.rows.length > 0) {
+                    etablissement_id = etabResult.rows[0].id;
+                }
+            }
+
+            if (!etablissement_id) {
+                console.log(`Etablissement not found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+            
+            // insert emploi and return id
+            const insertQuery = `
+                INSERT INTO emplois (personne, date_debut, etablissement) 
+                VALUES ($1, $2, $3)
+                RETURNING id
+            `;
+            const insertResult = await new_client.query(insertQuery, [personne_id, lastAffectation.rows[0].date_debut, etablissement_id]);
+            const emploi_id = insertResult.rows[0].id;
+            console.log(`Inserted emploi for: ${row.prenom} ${row.nom}`);
+
+            // get corps id
+            let corp_id = null;
+            if (row.corp) {
+                console.log(`Looking up corp: ${row.corp}`);
+                const corpQuery = `SELECT id FROM corps_enseignants_chercheurs WHERE UPPER(corps) = UPPER($1)`;
+                const corpResult = await new_client.query(corpQuery, [row.corp]);
+                if (corpResult.rows.length > 0) {
+                    corp_id = corpResult.rows[0].id;
+                }
+            }
+
+            // get grade id
+            let grade_id = null;
+            if (row.grade) {
+                console.log(`Looking up grade: ${row.grade}`);
+                const gradeQuery = `SELECT id FROM grades WHERE UPPER(grade) = UPPER($1)`;
+                const gradeResult = await new_client.query(gradeQuery, [row.grade]);
+                if (gradeResult.rows.length > 0) {
+                    grade_id = gradeResult.rows[0].id;
+                }
+            }
+
+            if (corp_id && grade_id) {
+                // insert emplois_enseignants_chercheurs
+                const emploiECInsertQuery = `
+                    INSERT INTO emplois_enseignants_chercheurs (corps, grade, emploi)
+                    VALUES ($1, $2, $3)
+                `;
+                await new_client.query(emploiECInsertQuery, [corp_id, grade_id, emploi_id]);
+                console.log(`Inserted emploi_enseignant_chercheur for: ${row.prenom} ${row.nom}`);
+            } else {
+                console.log(`Corp or Grade not found for: ${row.prenom} ${row.nom}, skipping emploi_enseignant_chercheur creation.`);
+            }
+
+        }
+    }
+}
+
+
+async function emplois_chercheurs() {
+    // For all membres with type_emploi 'Chercheur titulaire', create an emploi in the new database
+    const query = `SELECT m.nom, m.prenom, te.type_emploi, g.grade, c.corp, e.etablissement
+        FROM membres m
+        JOIN types_emploi te ON m.type_emploi = te.id
+        JOIN grades g ON m.grade = g.id
+        JOIN corps c ON m.corps = c.id
+        JOIN etablissements e ON m.etablissement = e.id
+        WHERE te.type_emploi = 'Chercheur titulaire';`;
+    const { rows } = await old_client.query(query);
+    for (const row of rows) {
+        // get personne id
+        const checkQuery = `
+            SELECT id FROM personnes
+            WHERE UPPER(nom) = UPPER($1) AND UPPER(prenom) = UPPER($2)
+        `;
+        const existingPerson = await new_client.query(checkQuery, [row.nom, row.prenom]);
+        if (existingPerson.rows.length > 0) {
+            const personne_id = existingPerson.rows[0].id;
+
+            const lastAffectationQuery = `
+                SELECT id, date_debut FROM affectations_laboratoires
+                WHERE personne = $1 AND laboratoire = 1
+                ORDER BY date_debut DESC
+                LIMIT 1
+            `;
+            const lastAffectation = await new_client.query(lastAffectationQuery, [personne_id]);
+
+            if (lastAffectation.rows.length === 0) {
+                console.log(`No affectation_laboratoire found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+
+            // get etablissement id
+            let etablissement_id = null;
+            if (row.etablissement) {
+                console.log(`Looking up etablissement: ${row.etablissement}`);
+                const etabQuery = `SELECT id FROM etablissements WHERE UPPER(etablissement) = UPPER($1)`;
+                const etabResult = await new_client.query(etabQuery, [row.etablissement]);
+                if (etabResult.rows.length > 0) {
+                    etablissement_id = etabResult.rows[0].id;
+                }
+            }
+
+            if (!etablissement_id) {
+                console.log(`Etablissement not found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+            
+            // insert emploi and return id
+            const insertQuery = `
+                INSERT INTO emplois (personne, date_debut, etablissement) 
+                VALUES ($1, $2, $3)
+                RETURNING id
+            `;
+            const insertResult = await new_client.query(insertQuery, [personne_id, lastAffectation.rows[0].date_debut, etablissement_id]);
+            const emploi_id = insertResult.rows[0].id;
+            console.log(`Inserted emploi for: ${row.prenom} ${row.nom}`);
+
+            // get corps id
+            let corp_id = null;
+            if (row.corp) {
+                console.log(`Looking up corp: ${row.corp}`);
+                const corpQuery = `SELECT id FROM corps_chercheurs WHERE UPPER(corps) = UPPER($1)`;
+                const corpResult = await new_client.query(corpQuery, [row.corp]);
+                if (corpResult.rows.length > 0) {
+                    corp_id = corpResult.rows[0].id;
+                }
+            }
+
+            // get grade id
+            let grade_id = null;
+            if (row.grade) {
+                console.log(`Looking up grade: ${row.grade}`);
+                const gradeQuery = `SELECT id FROM grades WHERE UPPER(grade) = UPPER($1)`;
+                const gradeResult = await new_client.query(gradeQuery, [row.grade]);
+                if (gradeResult.rows.length > 0) {
+                    grade_id = gradeResult.rows[0].id;
+                }
+            }
+
+            if (corp_id && grade_id) {
+                // insert emplois_chercheurs
+                const emploiCInsertQuery = `
+                    INSERT INTO emplois_chercheurs (corps, grade, emploi)
+                    VALUES ($1, $2, $3)
+                `;
+                await new_client.query(emploiCInsertQuery, [corp_id, grade_id, emploi_id]);
+                console.log(`Inserted emploi_chercheur for: ${row.prenom} ${row.nom}`);
+            } else {
+                console.log(`Corp or Grade not found for: ${row.prenom} ${row.nom}, skipping emploi_chercheur creation.`);
+            }
+
+        }
+    }
+}
+
+
+
+async function emplois_biatss() {
+    // For all membres with type_emploi 'BIATSS - BAP E' or 'BIATSS - BAP J', create an emploi in the new database
+    const query = `SELECT m.nom, m.prenom, te.type_emploi, g.grade, c.corp, e.etablissement
+        FROM membres m
+        JOIN types_emploi te ON m.type_emploi = te.id
+        JOIN grades g ON m.grade = g.id
+        JOIN corps c ON m.corps = c.id
+        JOIN etablissements e ON m.etablissement = e.id
+        WHERE te.type_emploi IN ('BIATSS - BAP E', 'BIATSS - BAP J');`;
+    const { rows } = await old_client.query(query);
+    for (const row of rows) {
+        // get personne id
+        const checkQuery = `
+            SELECT id FROM personnes
+            WHERE UPPER(nom) = UPPER($1) AND UPPER(prenom) = UPPER($2)
+        `;
+        const existingPerson = await new_client.query(checkQuery, [row.nom, row.prenom]);
+        if (existingPerson.rows.length > 0) {
+            const personne_id = existingPerson.rows[0].id;
+
+            const lastAffectationQuery = `
+                SELECT id, date_debut FROM affectations_laboratoires
+                WHERE personne = $1 AND laboratoire = 1
+                ORDER BY date_debut DESC
+                LIMIT 1
+            `;
+            const lastAffectation = await new_client.query(lastAffectationQuery, [personne_id]);
+
+            if (lastAffectation.rows.length === 0) {
+                console.log(`No affectation_laboratoire found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+
+            // get etablissement id
+            let etablissement_id = null;
+            if (row.etablissement) {
+                console.log(`Looking up etablissement: ${row.etablissement}`);
+                const etabQuery = `SELECT id FROM etablissements WHERE UPPER(etablissement) = UPPER($1)`;
+                const etabResult = await new_client.query(etabQuery, [row.etablissement]);
+                if (etabResult.rows.length > 0) {
+                    etablissement_id = etabResult.rows[0].id;
+                }
+            }
+
+            if (!etablissement_id) {
+                console.log(`Etablissement not found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+            
+            // insert emploi and return id
+            const insertQuery = `
+                INSERT INTO emplois (personne, date_debut, etablissement) 
+                VALUES ($1, $2, $3)
+                RETURNING id
+            `;
+            const insertResult = await new_client.query(insertQuery, [personne_id, lastAffectation.rows[0].date_debut, etablissement_id]);
+            const emploi_id = insertResult.rows[0].id;
+            console.log(`Inserted emploi for: ${row.prenom} ${row.nom}`);
+
+            // get corps id
+            let corp_id = null;
+            if (row.corp) {
+                console.log(`Looking up corp: ${row.corp}`);
+                const corpQuery = `SELECT id FROM corps_biatss WHERE UPPER(corps) = UPPER($1)`;
+                const corpResult = await new_client.query(corpQuery, [row.corp]);
+                if (corpResult.rows.length > 0) {
+                    corp_id = corpResult.rows[0].id;
+                }
+            }
+
+            // get grade id
+            let grade_id = null;
+            if (row.grade) {
+                console.log(`Looking up grade: ${row.grade}`);
+                const gradeQuery = `SELECT id FROM grades WHERE UPPER(grade) = UPPER($1)`;
+                const gradeResult = await new_client.query(gradeQuery, [row.grade]);
+                if (gradeResult.rows.length > 0) {
+                    grade_id = gradeResult.rows[0].id;
+                }
+            }
+
+            // get bap id by checking if bap is included in row.type_emploi
+            let bap_id = null;
+            if (row.type_emploi) {
+                console.log(`Looking up bap: ${row.type_emploi}`);
+                const bapQuery = `SELECT id FROM baps WHERE POSITION(UPPER(bap) IN UPPER($1)) > 0;`;
+                const bapResult = await new_client.query(bapQuery, [row.type_emploi]);
+                if (bapResult.rows.length > 0) {
+                    bap_id = bapResult.rows[0].id;
+                }
+            }
+
+            if (corp_id && grade_id && bap_id) {
+                // insert emplois_biatss
+                const emploiBiatssInsertQuery = `
+                    INSERT INTO emplois_biatss (corps, grade, emploi, bap)
+                    VALUES ($1, $2, $3, $4)
+                `;
+                await new_client.query(emploiBiatssInsertQuery, [corp_id, grade_id, emploi_id, bap_id]);
+                console.log(`Inserted emploi_biatss for: ${row.prenom} ${row.nom}`);
+            } else {
+                console.log(`Corp or Grade not found for: ${row.prenom} ${row.nom}, skipping emploi_biatss creation.`);
+            }
+
+        }
+    }
+}
+
+
 async function migrate() {
     console.log("Starting migration from old database to new database...");
     await membresToPersonnes();
@@ -542,6 +848,9 @@ async function migrate() {
     await create_labri_structures();
     await affectation_laboratoire();
     await set_affectations_structures();
+    await emplois_enseignants_chercheurs();
+    await emplois_chercheurs();
+    await emplois_biatss();
     console.log("Migration completed.");
 
 }

@@ -123,6 +123,11 @@ CREATE TABLE grades (
   grade VARCHAR(40) NOT NULL
 );
 
+CREATE TABLE baps (
+  id SERIAL PRIMARY KEY,
+  bap VARCHAR(40) NOT NULL
+);
+
 CREATE TABLE emplois_enseignants_chercheurs (
     id SERIAL PRIMARY KEY,
     corps INTEGER NOT NULL REFERENCES corps_enseignants_chercheurs(id),
@@ -141,6 +146,7 @@ CREATE TABLE emplois_biatss (
     id SERIAL PRIMARY KEY,
     corps INTEGER NOT NULL REFERENCES corps_biatss(id),
     grade INTEGER NOT NULL REFERENCES grades(id),
+    bap INTEGER NOT NULL REFERENCES baps(id),
     emploi INTEGER NOT NULL REFERENCES emplois(id)
 );
 
