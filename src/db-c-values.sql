@@ -67,6 +67,12 @@ INSERT INTO nationalites (id, nationalite) VALUES
   (58, 'anglaise')
 ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO types_emplois (id, type_emploi) VALUES
+  (1, 'Fonctionnaire'),
+  (2, 'CDI'),
+  (3, 'CDD')
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO grades (id, grade) VALUES
   (1, 'classe normale'),
   (2, 'hors classe'),

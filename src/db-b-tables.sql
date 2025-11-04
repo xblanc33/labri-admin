@@ -90,8 +90,14 @@ CREATE TABLE fin_affectations_structures_laboratoires (
     date_fin DATE NOT NULL
 );
 
+CREATE TABLE types_emplois (
+    id SERIAL PRIMARY KEY,
+    type_emploi VARCHAR(100) NOT NULL
+);
+
 CREATE TABLE emplois (
     id SERIAL PRIMARY KEY,
+    type_emploi INTEGER NOT NULL REFERENCES types_emplois(id),
     date_debut DATE NOT NULL,
     personne INTEGER NOT NULL REFERENCES personnes(id),
     etablissement INTEGER NOT NULL REFERENCES etablissements(id)
@@ -176,16 +182,6 @@ CREATE TABLE emplois_postdoctoraux (
     organisme_financeur VARCHAR(100)
 );
 
-CREATE TABLE emplois_cdd (
-    id SERIAL PRIMARY KEY,
-    emploi INTEGER NOT NULL REFERENCES emplois(id),
-    duree_mois INTEGER NOT NULL
-);
-
-CREATE TABLE emplois_cdi (
-    id SERIAL PRIMARY KEY,
-    emploi INTEGER NOT NULL REFERENCES emplois(id)
-);
 
 CREATE TABLE emplois_stage (
     id SERIAL PRIMARY KEY,
