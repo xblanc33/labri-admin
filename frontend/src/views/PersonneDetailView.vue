@@ -151,7 +151,7 @@
             </thead>
             <tbody>
               <tr v-for="emploi in emplois" :key="emploi.id">
-                <td>{{ renderEmploymentType(emploi.type) }}</td>
+                <td>{{ emploi.type_label || renderEmploymentType(emploi.type) }}</td>
                 <td>{{ emploi.corps_nom || lookupCorpsLabel(emploi.type, emploi.corps_id) || '—' }}</td>
                 <td>{{ emploi.grade_nom || lookupGradeLabel(emploi.grade_id) || '—' }}</td>
                 <td>{{ emploi.etablissement_nom || lookupEtablissementLabel(emploi.etablissement) || `Établissement #${emploi.etablissement}` }}</td>
@@ -159,7 +159,7 @@
                 <td>{{ formatDate(emploi.date_fin) }}</td>
                 <td>{{ formatDoctoratDetails(emploi) }}</td>
                 <td>
-                  <span v-if="emploi.type === 'cdd'">
+                  <span v-if="typeNeedsDuration(emploi.type)">
                     {{ formatMonths(emploi.duree_mois) }}
                   </span>
                   <span v-else>—</span>
@@ -188,6 +188,23 @@
             </tbody>
           </table>
         </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h3>HDR</h3>
+        </div>
+        <div v-if="!hdrs.length" class="empty">Aucune HDR enregistrée.</div>
+        <ul v-else class="assignments-list">
+          <li v-for="hdr in hdrs" :key="hdr.id">
+            <div class="assignment-row">
+              <div class="assignment-info">
+                <strong>HDR</strong>
+                <span>{{ formatDate(hdr.date_obtention) }}</span>
+              </div>
+            </div>
+          </li>
+        </ul>
       </article>
 
     <dialog ref="labDialog">
@@ -383,11 +400,16 @@
 
         <label>
           Type d'emploi
-          <select v-model="employmentForm.type" required>
+          <select
+            v-model="employmentForm.type"
+            required
+            :disabled="employmentForm.mode === 'edit' && ['doctorant', 'postdoc', 'stage'].includes(employmentForm.type)"
+          >
             <option
               v-for="option in employmentTypeOptions"
               :key="option.value"
               :value="option.value"
+              :disabled="employmentForm.mode === 'add' && ['doctorant', 'postdoc', 'stage'].includes(option.value)"
             >
               {{ option.label }}
             </option>
@@ -505,6 +527,7 @@ const structureActionsLoading = ref(false);
 const error = ref("");
 const saving = ref(false);
 const emplois = ref([]);
+const hdrs = ref([]);
 const corpsOptions = reactive({
   chercheur: [],
   enseignant: [],
@@ -552,9 +575,12 @@ const employmentForm = reactive({
 });
 
 const employmentTypeOptions = [
-  { value: "chercheur", label: "Chercheur titulaire" },
-  { value: "enseignant-chercheur", label: "Enseignant·chercheur titulaire" },
+  { value: "chercheur", label: "Chercheurs" },
+  { value: "enseignant-chercheur", label: "Enseignants-chercheurs" },
   { value: "biatss", label: "BIATSS" },
+  { value: "doctorant", label: "Docteur" },
+  { value: "postdoc", label: "Postdoc" },
+  { value: "stage", label: "Stage" },
   { value: "cdd", label: "CDD" },
   { value: "autre", label: "Autre" },
 ];
@@ -602,7 +628,7 @@ const typeNeedsCorps = (type) =>
   type === "enseignant-chercheur" ||
   type === "biatss";
 const typeNeedsGrade = (type) => typeNeedsCorps(type);
-const typeNeedsDuration = (type) => type === "cdd";
+const typeNeedsDuration = (type) => type === "cdd" || type === "stage";
 
 const availableCorpsOptions = computed(() => {
   switch (employmentForm.type) {
@@ -618,9 +644,12 @@ const availableCorpsOptions = computed(() => {
 });
 
 const employmentTypeLabels = {
-  chercheur: "Chercheur titulaire",
-  "enseignant-chercheur": "Enseignant·chercheur titulaire",
+  chercheur: "Chercheurs",
+  "enseignant-chercheur": "Enseignants-chercheurs",
   biatss: "BIATSS",
+  doctorant: "Docteur",
+  postdoc: "Postdoc",
+  stage: "Stage",
   cdd: "CDD",
   autre: "Autre",
 };
@@ -745,6 +774,7 @@ async function loadPersonne() {
     const data = await fetchJSON(`${API_BASE}/personnes/${personneId.value}`);
     personne.value = data;
     emplois.value = data.emplois || [];
+    hdrs.value = Array.isArray(data.hdrs) ? data.hdrs : [];
     form.nom = data.nom;
     form.prenom = data.prenom;
     form.sexe = data.sexe;
@@ -754,6 +784,7 @@ async function loadPersonne() {
     error.value = err.message ?? "Impossible de charger la personne.";
     personne.value = null;
     emplois.value = [];
+    hdrs.value = [];
     throw err;
   }
 }
@@ -1244,12 +1275,11 @@ function openEmploymentDialog(mode, emploi = null) {
     employmentForm.date_debut = normalizeDate(emploi.date_debut);
     employmentForm.corps = emploi.corps_id ?? null;
     employmentForm.grade = emploi.grade_id ?? null;
-    employmentForm.duree_mois =
-      emploi.type === "cdd"
-        ? emploi.duree_mois && emploi.duree_mois > 0
-          ? emploi.duree_mois
-          : 12
-        : null;
+    employmentForm.duree_mois = typeNeedsDuration(emploi.type)
+      ? emploi.duree_mois && emploi.duree_mois > 0
+        ? emploi.duree_mois
+        : employmentForm.duree_mois || 1
+      : null;
     employmentForm.type = emploi.type;
   }
   employmentDialog.value?.showModal();
@@ -1404,6 +1434,9 @@ function formatDoctoratDetails(emploi) {
   }
   if (emploi.etablissement_master_nom) {
     parts.push(`Master : ${emploi.etablissement_master_nom}`);
+  }
+  if (emploi.organisme_financeur) {
+    parts.push(`Financement : ${emploi.organisme_financeur}`);
   }
   return parts.length ? parts.join(" • ") : "—";
 }

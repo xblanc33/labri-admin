@@ -901,10 +901,10 @@ async function emplois_postdoc() {
 
             // insert emplois_postdoctoraux
             const emploiPostdocInsertQuery = `
-                INSERT INTO emplois_postdoctoraux (emploi, organisme_financeur)
-                VALUES ($1, $2)
+                INSERT INTO emplois_postdoctoraux (emploi)
+                VALUES ($1)
             `;
-            await new_client.query(emploiPostdocInsertQuery, [emploi_id, etablissement_id]);
+            await new_client.query(emploiPostdocInsertQuery, [emploi_id]);
             console.log(`Inserted emploi_postdoctoraux for: ${row.prenom} ${row.nom}`);
 
         }
@@ -997,15 +997,8 @@ async function emplois_cdd_cdi() {
             }
 
             // get bap id by checking if bap is included in row.type_emploi
-            let bap_id = null;
-            if (row.type_emploi) {
-                console.log(`Looking up bap: ${row.type_emploi}`);
-                const bapQuery = `SELECT id FROM baps WHERE POSITION(UPPER(bap) IN UPPER($1)) > 0;`;
-                const bapResult = await new_client.query(bapQuery, [row.type_emploi]);
-                if (bapResult.rows.length > 0) {
-                    bap_id = bapResult.rows[0].id;
-                }
-            }
+            let bap_id = 5;
+            
 
             if (corp_id && grade_id && bap_id) {
                 // insert emplois_biatss
@@ -1025,6 +1018,158 @@ async function emplois_cdd_cdi() {
 
 
 
+async function emplois_doctoraux() {
+    // For all doctorants
+    const query = `SELECT d.nom, d.prenom, d.etablissement_employeur, d.categorie_financement, e.etablissement, cf.categorie
+        FROM doctorants d
+        JOIN categories_financement_these cf ON d.categorie_financement = cf.id
+        JOIN etablissements e ON d.etablissement_employeur = e.id;`;
+    const { rows } = await old_client.query(query);
+    for (const row of rows) {
+        // get personne id
+        const checkQuery = `
+            SELECT id FROM personnes
+            WHERE UPPER(nom) = UPPER($1) AND UPPER(prenom) = UPPER($2)
+        `;
+        const existingPerson = await new_client.query(checkQuery, [row.nom, row.prenom]);
+        if (existingPerson.rows.length > 0) {
+            const personne_id = existingPerson.rows[0].id;
+
+            const lastAffectationQuery = `
+                SELECT id, date_debut FROM affectations_laboratoires
+                WHERE personne = $1 AND laboratoire = 1
+                ORDER BY date_debut DESC
+                LIMIT 1
+            `;
+            const lastAffectation = await new_client.query(lastAffectationQuery, [personne_id]);
+
+            if (lastAffectation.rows.length === 0) {
+                console.log(`No affectation_laboratoire found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+
+            // get etablissement id
+            let etablissement_id = null;
+            if (row.etablissement) {
+                console.log(`Looking up etablissement: ${row.etablissement}`);
+                const etabQuery = `SELECT id FROM etablissements WHERE UPPER(etablissement) = UPPER($1)`;
+                const etabResult = await new_client.query(etabQuery, [row.etablissement]);
+                if (etabResult.rows.length > 0) {
+                    etablissement_id = etabResult.rows[0].id;
+                }
+            }
+
+            if (!etablissement_id) {
+                console.log(`Etablissement not found for: ${row.prenom} ${row.nom}, skipping emploi creation.`);
+                break;
+            }
+
+            
+            // insert emploi and return id
+            const insertQuery = `
+                INSERT INTO emplois (personne, date_debut, etablissement, type_emploi) 
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+            `;
+            const insertResult = await new_client.query(insertQuery, [personne_id, lastAffectation.rows[0].date_debut, etablissement_id, 3]);
+            const emploi_id = insertResult.rows[0].id;
+            console.log(`Inserted emploi for: ${row.prenom} ${row.nom}`);
+
+
+            // get categorie_financement id
+            let categorie_financement_id = null;
+            if (row.categorie) {
+                console.log(`Looking up categorie_financement: ${row.categorie}`);
+                const catFinQuery = `SELECT id FROM categories_financements_theses WHERE UPPER(categorie) = UPPER($1)`;
+                const catFinResult = await new_client.query(catFinQuery, [row.categorie]);
+                if (catFinResult.rows.length > 0) {
+                    categorie_financement_id = catFinResult.rows[0].id;
+                }
+            }
+
+            if (!categorie_financement_id) {
+                console.log(`Categorie_financement not found for: ${row.prenom} ${row.nom}, skipping emploi_doctoraux creation.`);
+                break;
+            }
+
+            // insert emplois_doctoraux
+
+            const emploiDoctorauxInsertQuery = `
+                INSERT INTO emplois_doctoraux (emploi, categorie_financement_these)
+                VALUES ($1, $2)
+            `;
+            await new_client.query(emploiDoctorauxInsertQuery, [emploi_id, categorie_financement_id]);
+            console.log(`Inserted emploi_doctoraux for: ${row.prenom} ${row.nom}`);
+
+        }
+    }
+}
+
+async function hdrs() {
+    const query = `SELECT m.nom, m.prenom, oh.date_obtention
+	FROM obtentions_hdr oh
+	JOIN membres m ON m.id = oh.membre;`;
+    const { rows } = await old_client.query(query);
+    for (const row of rows) {
+        // get personne id
+        const checkQuery = `
+            SELECT id FROM personnes
+            WHERE UPPER(nom) = UPPER($1) AND UPPER(prenom) = UPPER($2)
+        `;
+        const existingPerson = await new_client.query(checkQuery, [row.nom, row.prenom]);
+        if (existingPerson.rows.length > 0) {
+            const personne_id = existingPerson.rows[0].id;
+            
+            // insert hdr
+            const insertQuery = `
+                INSERT INTO hdrs (personne, date_obtention)
+                VALUES ($1, $2)
+            `;
+            await new_client.query(insertQuery, [personne_id, row.date_obtention]);
+            console.log(`Inserted HDR for: ${row.prenom} ${row.nom}`);
+        }
+    }
+}
+
+async function emeritats() {
+    const query = `SELECT m.nom, m.prenom, e.date_debut, e.date_fin
+	FROM membres m
+	JOIN emeritats e ON m.id = e.membre;`;
+
+    const { rows } = await old_client.query(query);
+    for (const row of rows) {
+        // get personne id
+        const checkQuery = `
+            SELECT id FROM personnes
+            WHERE UPPER(nom) = UPPER($1) AND UPPER(prenom) = UPPER($2)
+        `;
+        const existingPerson = await new_client.query(checkQuery, [row.nom, row.prenom]);
+        if (existingPerson.rows.length > 0) {
+            const personne_id = existingPerson.rows[0].id;
+            
+            // insert emeritat
+            const insertQuery = `
+                INSERT INTO emeritats (personne, de_droit, date_debut, duree_mois)
+                VALUES ($1, $2, $3, $4)
+            `;
+            await new_client.query(insertQuery, [personne_id, false, row.date_debut, calculateDurationInMonths(row.date_debut, row.date_fin)]);
+            console.log(`Inserted Emeritat for: ${row.prenom} ${row.nom}`);
+        }
+    }
+
+    function calculateDurationInMonths(startDate, endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        let months;
+        months = (end.getFullYear() - start.getFullYear()) * 12;
+        months -= start.getMonth();
+        months += end.getMonth();
+        return months <= 0 ? 0 : months;
+    }
+}
+
+
+
 async function migrate() {
     console.log("Starting migration from old database to new database...");
     await membresToPersonnes();
@@ -1038,6 +1183,10 @@ async function migrate() {
     await emplois_chercheurs();
     await emplois_biatss();
     await emplois_postdoc();
+    await emplois_cdd_cdi();
+    await emplois_doctoraux();
+    await hdrs();
+    await emeritats();
     console.log("Migration completed.");
 
 }

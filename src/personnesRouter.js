@@ -8,8 +8,67 @@ const EMPLOYMENT_TYPES = new Set([
   "enseignant-chercheur",
   "biatss",
   "cdd",
+  "doctorant",
+  "postdoc",
+  "stage",
   "autre",
 ]);
+
+let cachedHasEmploisCddTable = null;
+const tableColumnCache = new Map();
+
+async function hasEmploisCddTable(db) {
+  if (cachedHasEmploisCddTable !== null) {
+    return cachedHasEmploisCddTable;
+  }
+  try {
+    const { rows } = await db.query(
+      "SELECT to_regclass('public.emplois_cdd') AS regclass"
+    );
+    cachedHasEmploisCddTable = Boolean(rows[0]?.regclass);
+  } catch (error) {
+    cachedHasEmploisCddTable = false;
+  }
+  return cachedHasEmploisCddTable;
+}
+
+async function getTableColumnConfig(db, tableName) {
+  if (tableColumnCache.has(tableName)) {
+    return tableColumnCache.get(tableName);
+  }
+  try {
+    const { rows } = await db.query(
+      `SELECT column_name
+         FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = $1`,
+      [tableName]
+    );
+    const columns = new Set(rows.map((row) => row.column_name));
+    const config = {
+      exists: columns.size > 0,
+      columns,
+    };
+    tableColumnCache.set(tableName, config);
+    return config;
+  } catch (error) {
+    const config = { exists: false, columns: new Set() };
+    tableColumnCache.set(tableName, config);
+    return config;
+  }
+}
+
+async function getDoctoralColumnConfig(db) {
+  return getTableColumnConfig(db, "emplois_doctoraux");
+}
+
+async function getPostdocColumnConfig(db) {
+  return getTableColumnConfig(db, "emplois_postdoctoraux");
+}
+
+async function getStageColumnConfig(db) {
+  return getTableColumnConfig(db, "emplois_stage");
+}
 
 async function fetchPersonneById(pool, id) {
   const { rows } = await pool.query(
@@ -19,31 +78,184 @@ async function fetchPersonneById(pool, id) {
             p.sexe,
             p.nationalite,
             n.nationalite AS nationalite_nom,
-            p.date_naissance
+            p.date_naissance,
+            COALESCE(hdr_data.hdrs, '[]'::jsonb) AS hdrs
      FROM personnes p
      LEFT JOIN nationalites n ON n.id = p.nationalite
+     LEFT JOIN LATERAL (
+       SELECT jsonb_agg(
+                jsonb_build_object(
+                  'id', h.id,
+                  'date_obtention', h.date_obtention
+                ) ORDER BY h.date_obtention
+              ) AS hdrs
+       FROM hdrs h
+       WHERE h.personne = p.id
+     ) hdr_data ON TRUE
      WHERE p.id = $1`,
     [id]
   );
-  return rows[0] ?? null;
+  const personne = rows[0] ?? null;
+  if (personne) {
+    const hdrs = Array.isArray(personne.hdrs) ? personne.hdrs : [];
+    hdrs.sort((a, b) => {
+      if (!a?.date_obtention) return -1;
+      if (!b?.date_obtention) return 1;
+      return new Date(a.date_obtention) - new Date(b.date_obtention);
+    });
+    personne.hdrs = hdrs;
+  }
+  return personne;
 }
 
 async function fetchPersonneEmployments(pool, id) {
+  const includeCdd = await hasEmploisCddTable(pool);
+  const doctoralConfig = await getDoctoralColumnConfig(pool);
+  const hasDoctoral = doctoralConfig.exists;
+  const hasDoctoralEcole =
+    hasDoctoral && doctoralConfig.columns.has("ecole_doctorale");
+  const hasDoctoralCategorie =
+    hasDoctoral && doctoralConfig.columns.has("categorie_financement_these");
+  const hasDoctoralMaster =
+    hasDoctoral && doctoralConfig.columns.has("etablissement_master");
+  const postdocConfig = await getPostdocColumnConfig(pool);
+  const hasPostdoc = postdocConfig.exists;
+  const hasPostdocOrganisme =
+    hasPostdoc && postdocConfig.columns.has("organisme_financeur");
+  const stageConfig = await getStageColumnConfig(pool);
+  const hasStage = stageConfig.exists;
+  const hasStageDuration = hasStage && stageConfig.columns.has("duree_mois");
+
+  const typeCaseParts = [
+    "WHEN ec.emploi IS NOT NULL THEN 'chercheur'",
+    "WHEN eec.emploi IS NOT NULL THEN 'enseignant-chercheur'",
+    "WHEN eb.emploi IS NOT NULL THEN 'biatss'",
+  ];
+  if (hasDoctoral) {
+    typeCaseParts.push("WHEN edoc.emploi IS NOT NULL THEN 'doctorant'");
+  }
+  if (hasPostdoc) {
+    typeCaseParts.push("WHEN epd.emploi IS NOT NULL THEN 'postdoc'");
+  }
+  if (hasStage) {
+    typeCaseParts.push("WHEN estage.emploi IS NOT NULL THEN 'stage'");
+  }
+  typeCaseParts.push("WHEN te.type_emploi ILIKE 'cdd' THEN 'cdd'");
+  if (includeCdd) {
+    typeCaseParts.push("WHEN cdd.emploi IS NOT NULL THEN 'cdd'");
+  }
+  typeCaseParts.push("ELSE 'autre'");
+
+  const typeLabelCaseParts = [
+    "WHEN ec.emploi IS NOT NULL THEN 'chercheurs'",
+    "WHEN eec.emploi IS NOT NULL THEN 'enseignants_chercheurs'",
+    "WHEN eb.emploi IS NOT NULL THEN 'biatss'",
+  ];
+  if (hasDoctoral) {
+    typeLabelCaseParts.push("WHEN edoc.emploi IS NOT NULL THEN 'docteur'");
+  }
+  if (hasPostdoc) {
+    typeLabelCaseParts.push("WHEN epd.emploi IS NOT NULL THEN 'postdoc'");
+  }
+  if (hasStage) {
+    typeLabelCaseParts.push("WHEN estage.emploi IS NOT NULL THEN 'stage'");
+  }
+  typeLabelCaseParts.push("WHEN te.type_emploi ILIKE 'cdd' THEN 'cdd'");
+  if (includeCdd) {
+    typeLabelCaseParts.push("WHEN cdd.emploi IS NOT NULL THEN 'cdd'");
+  }
+  typeLabelCaseParts.push("ELSE 'autre'");
+
+  const doctoralSelectParts = [
+    hasDoctoralEcole
+      ? "edoc.ecole_doctorale AS ecole_doctorale_id"
+      : "NULL AS ecole_doctorale_id",
+    hasDoctoralEcole
+      ? "eco.ecole_doctorale AS ecole_doctorale_nom"
+      : "NULL AS ecole_doctorale_nom",
+    hasDoctoralCategorie
+      ? "edoc.categorie_financement_these AS categorie_financement_id"
+      : "NULL AS categorie_financement_id",
+    hasDoctoralCategorie
+      ? "cft.categorie AS categorie_financement_nom"
+      : "NULL AS categorie_financement_nom",
+    hasDoctoralMaster
+      ? "edoc.etablissement_master AS etablissement_master_id"
+      : "NULL AS etablissement_master_id",
+    hasDoctoralMaster
+      ? "master.etablissement AS etablissement_master_nom"
+      : "NULL AS etablissement_master_nom",
+  ];
+
+  const joins = [
+    "LEFT JOIN etablissements etab ON etab.id = e.etablissement",
+    "LEFT JOIN types_emplois te ON te.id = e.type_emploi",
+    "LEFT JOIN emplois_chercheurs ec ON ec.emploi = e.id",
+    "LEFT JOIN corps_chercheurs cc ON cc.id = ec.corps",
+    "LEFT JOIN grades gc ON gc.id = ec.grade",
+    "LEFT JOIN emplois_enseignants_chercheurs eec ON eec.emploi = e.id",
+    "LEFT JOIN corps_enseignants_chercheurs cec ON cec.id = eec.corps",
+    "LEFT JOIN grades ge ON ge.id = eec.grade",
+    "LEFT JOIN emplois_biatss eb ON eb.emploi = e.id",
+    "LEFT JOIN corps_biatss cb ON cb.id = eb.corps",
+    "LEFT JOIN grades gb ON gb.id = eb.grade",
+  ];
+  if (hasPostdoc) {
+    joins.push("LEFT JOIN emplois_postdoctoraux epd ON epd.emploi = e.id");
+  }
+  if (hasStage) {
+    joins.push("LEFT JOIN emplois_stage estage ON estage.emploi = e.id");
+  }
+  if (includeCdd) {
+    joins.push("LEFT JOIN emplois_cdd cdd ON cdd.emploi = e.id");
+  }
+  joins.push("LEFT JOIN fin_emplois fe ON fe.emploi = e.id");
+  if (hasDoctoral) {
+    joins.push("LEFT JOIN emplois_doctoraux edoc ON edoc.emploi = e.id");
+  }
+  if (hasDoctoralEcole) {
+    joins.push("LEFT JOIN ecoles_doctorales eco ON eco.id = edoc.ecole_doctorale");
+  }
+  if (hasDoctoralCategorie) {
+    joins.push(
+      "LEFT JOIN categories_financements_theses cft ON cft.id = edoc.categorie_financement_these"
+    );
+  }
+  if (hasDoctoralMaster) {
+    joins.push("LEFT JOIN etablissements master ON master.id = edoc.etablissement_master");
+  }
+
+  const dureeExpressions = [];
+  if (includeCdd) {
+    dureeExpressions.push("cdd.duree_mois");
+  }
+  if (hasStageDuration) {
+    dureeExpressions.push("estage.duree_mois");
+  }
+  const dureeSelect =
+    dureeExpressions.length > 0
+      ? `COALESCE(${dureeExpressions.join(", ")})`
+      : "NULL";
+
+  const organismeSelect = hasPostdocOrganisme
+    ? "epd.organisme_financeur"
+    : "NULL";
+
   const { rows } = await pool.query(
     `SELECT e.id,
             e.date_debut,
             e.etablissement,
             etab.etablissement AS etablissement_nom,
             CASE
-              WHEN ec.emploi IS NOT NULL THEN 'chercheur'
-              WHEN eec.emploi IS NOT NULL THEN 'enseignant-chercheur'
-              WHEN eb.emploi IS NOT NULL THEN 'biatss'
-              WHEN cdd.emploi IS NOT NULL THEN 'cdd'
-              ELSE 'autre'
+              ${typeCaseParts.join("\n              ")}
             END AS type,
+            CASE
+              ${typeLabelCaseParts.join("\n              ")}
+            END AS type_label,
             COALESCE(cc.corps, cec.corps, cb.corps) AS corps_nom,
             COALESCE(gc.grade, ge.grade, gb.grade) AS grade_nom,
-            cdd.duree_mois,
+            ${dureeSelect} AS duree_mois,
+            te.type_emploi AS type_emploi_nom,
             CASE
               WHEN ec.emploi IS NOT NULL THEN ec.corps
               WHEN eec.emploi IS NOT NULL THEN eec.corps
@@ -57,30 +269,10 @@ async function fetchPersonneEmployments(pool, id) {
               ELSE NULL
             END AS grade_id,
             fe.date_fin,
-            edoc.ecole_doctorale AS ecole_doctorale_id,
-            eco.ecole_doctorale AS ecole_doctorale_nom,
-            edoc.categorie_financement_these AS categorie_financement_id,
-            cft.categorie AS categorie_financement_nom,
-            edoc.etablissement_master AS etablissement_master_id,
-            master.etablissement AS etablissement_master_nom
+            ${hasPostdocOrganisme ? "epd.organisme_financeur" : "NULL"} AS organisme_financeur,
+            ${doctoralSelectParts.join(",\n            ")}
      FROM emplois e
-     LEFT JOIN etablissements etab ON etab.id = e.etablissement
-     LEFT JOIN emplois_chercheurs ec ON ec.emploi = e.id
-     LEFT JOIN corps_chercheurs cc ON cc.id = ec.corps
-     LEFT JOIN grades gc ON gc.id = ec.grade
-     LEFT JOIN emplois_enseignants_chercheurs eec ON eec.emploi = e.id
-     LEFT JOIN corps_enseignants_chercheurs cec ON cec.id = eec.corps
-     LEFT JOIN grades ge ON ge.id = eec.grade
-     LEFT JOIN emplois_biatss eb ON eb.emploi = e.id
-     LEFT JOIN corps_biatss cb ON cb.id = eb.corps
-     LEFT JOIN grades gb ON gb.id = eb.grade
-     LEFT JOIN emplois_cdd cdd ON cdd.emploi = e.id
-     LEFT JOIN fin_emplois fe ON fe.emploi = e.id
-     LEFT JOIN emplois_doctoraux edoc ON edoc.emploi = e.id
-     LEFT JOIN ecoles_doctorales eco ON eco.id = edoc.ecole_doctorale
-     LEFT JOIN categories_financements_theses cft
-       ON cft.id = edoc.categorie_financement_these
-     LEFT JOIN etablissements master ON master.id = edoc.etablissement_master
+     ${joins.join("\n     ")}
      WHERE e.personne = $1
      ORDER BY e.date_debut`,
     [id]
@@ -89,21 +281,128 @@ async function fetchPersonneEmployments(pool, id) {
 }
 
 async function fetchEmploymentById(client, personneId, emploiId) {
+  const includeCdd = await hasEmploisCddTable(client);
+  const doctoralConfig = await getDoctoralColumnConfig(client);
+  const hasDoctoral = doctoralConfig.exists;
+  const hasDoctoralEcole =
+    hasDoctoral && doctoralConfig.columns.has("ecole_doctorale");
+  const hasDoctoralCategorie =
+    hasDoctoral && doctoralConfig.columns.has("categorie_financement_these");
+  const hasDoctoralMaster =
+    hasDoctoral && doctoralConfig.columns.has("etablissement_master");
+  const postdocConfig = await getPostdocColumnConfig(client);
+  const hasPostdoc = postdocConfig.exists;
+  const hasPostdocOrganisme =
+    hasPostdoc && postdocConfig.columns.has("organisme_financeur");
+  const stageConfig = await getStageColumnConfig(client);
+  const hasStage = stageConfig.exists;
+  const hasStageDuration = hasStage && stageConfig.columns.has("duree_mois");
+  const typeCaseParts = [
+    "WHEN ec.emploi IS NOT NULL THEN 'chercheur'",
+    "WHEN eec.emploi IS NOT NULL THEN 'enseignant-chercheur'",
+    "WHEN eb.emploi IS NOT NULL THEN 'biatss'",
+  ];
+  if (hasDoctoral) {
+    typeCaseParts.push("WHEN edoc.emploi IS NOT NULL THEN 'doctorant'");
+  }
+  if (hasPostdoc) {
+    typeCaseParts.push("WHEN epd.emploi IS NOT NULL THEN 'postdoc'");
+  }
+  if (hasStage) {
+    typeCaseParts.push("WHEN estage.emploi IS NOT NULL THEN 'stage'");
+  }
+  typeCaseParts.push("WHEN te.type_emploi ILIKE 'cdd' THEN 'cdd'");
+  if (includeCdd) {
+    typeCaseParts.push("WHEN cdd.emploi IS NOT NULL THEN 'cdd'");
+  }
+  typeCaseParts.push("ELSE 'autre'");
+
+  const doctoralSelectParts = [
+    hasDoctoralEcole
+      ? "edoc.ecole_doctorale AS ecole_doctorale_id"
+      : "NULL AS ecole_doctorale_id",
+    hasDoctoralEcole
+      ? "eco.ecole_doctorale AS ecole_doctorale_nom"
+      : "NULL AS ecole_doctorale_nom",
+    hasDoctoralCategorie
+      ? "edoc.categorie_financement_these AS categorie_financement_id"
+      : "NULL AS categorie_financement_id",
+    hasDoctoralCategorie
+      ? "cft.categorie AS categorie_financement_nom"
+      : "NULL AS categorie_financement_nom",
+    hasDoctoralMaster
+      ? "edoc.etablissement_master AS etablissement_master_id"
+      : "NULL AS etablissement_master_id",
+    hasDoctoralMaster
+      ? "master.etablissement AS etablissement_master_nom"
+      : "NULL AS etablissement_master_nom",
+  ];
+
+  const joins = [
+    "LEFT JOIN etablissements etab ON etab.id = e.etablissement",
+    "LEFT JOIN types_emplois te ON te.id = e.type_emploi",
+    "LEFT JOIN emplois_chercheurs ec ON ec.emploi = e.id",
+    "LEFT JOIN corps_chercheurs cc ON cc.id = ec.corps",
+    "LEFT JOIN grades gc ON gc.id = ec.grade",
+    "LEFT JOIN emplois_enseignants_chercheurs eec ON eec.emploi = e.id",
+    "LEFT JOIN corps_enseignants_chercheurs cec ON cec.id = eec.corps",
+    "LEFT JOIN grades ge ON ge.id = eec.grade",
+    "LEFT JOIN emplois_biatss eb ON eb.emploi = e.id",
+    "LEFT JOIN corps_biatss cb ON cb.id = eb.corps",
+    "LEFT JOIN grades gb ON gb.id = eb.grade",
+  ];
+  if (hasPostdoc) {
+    joins.push("LEFT JOIN emplois_postdoctoraux epd ON epd.emploi = e.id");
+  }
+  if (hasStage) {
+    joins.push("LEFT JOIN emplois_stage estage ON estage.emploi = e.id");
+  }
+  if (includeCdd) {
+    joins.push("LEFT JOIN emplois_cdd cdd ON cdd.emploi = e.id");
+  }
+  joins.push("LEFT JOIN fin_emplois fe ON fe.emploi = e.id");
+  if (hasDoctoral) {
+    joins.push("LEFT JOIN emplois_doctoraux edoc ON edoc.emploi = e.id");
+  }
+  if (hasDoctoralEcole) {
+    joins.push("LEFT JOIN ecoles_doctorales eco ON eco.id = edoc.ecole_doctorale");
+  }
+  if (hasDoctoralCategorie) {
+    joins.push(
+      "LEFT JOIN categories_financements_theses cft ON cft.id = edoc.categorie_financement_these"
+    );
+  }
+  if (hasDoctoralMaster) {
+    joins.push("LEFT JOIN etablissements master ON master.id = edoc.etablissement_master");
+  }
+
+  const dureeExpressions = [];
+  if (includeCdd) {
+    dureeExpressions.push("cdd.duree_mois");
+  }
+  if (hasStageDuration) {
+    dureeExpressions.push("estage.duree_mois");
+  }
+  const dureeSelect =
+    dureeExpressions.length > 0
+      ? `COALESCE(${dureeExpressions.join(", ")})`
+      : "NULL";
+
   const { rows } = await client.query(
     `SELECT e.id,
             e.date_debut,
             e.etablissement,
             etab.etablissement AS etablissement_nom,
             CASE
-              WHEN ec.emploi IS NOT NULL THEN 'chercheur'
-              WHEN eec.emploi IS NOT NULL THEN 'enseignant-chercheur'
-              WHEN eb.emploi IS NOT NULL THEN 'biatss'
-              WHEN cdd.emploi IS NOT NULL THEN 'cdd'
-              ELSE 'autre'
+              ${typeCaseParts.join("\n              ")}
             END AS type,
+            CASE
+              ${typeLabelCaseParts.join("\n              ")}
+            END AS type_label,
             COALESCE(cc.corps, cec.corps, cb.corps) AS corps_nom,
             COALESCE(gc.grade, ge.grade, gb.grade) AS grade_nom,
-            cdd.duree_mois,
+            ${dureeSelect} AS duree_mois,
+            te.type_emploi AS type_emploi_nom,
             CASE
               WHEN ec.emploi IS NOT NULL THEN ec.corps
               WHEN eec.emploi IS NOT NULL THEN eec.corps
@@ -117,30 +416,10 @@ async function fetchEmploymentById(client, personneId, emploiId) {
               ELSE NULL
             END AS grade_id,
             fe.date_fin,
-            edoc.ecole_doctorale AS ecole_doctorale_id,
-            eco.ecole_doctorale AS ecole_doctorale_nom,
-            edoc.categorie_financement_these AS categorie_financement_id,
-            cft.categorie AS categorie_financement_nom,
-            edoc.etablissement_master AS etablissement_master_id,
-            master.etablissement AS etablissement_master_nom
+            ${organismeSelect} AS organisme_financeur,
+            ${doctoralSelectParts.join(",\n            ")}
      FROM emplois e
-     LEFT JOIN etablissements etab ON etab.id = e.etablissement
-     LEFT JOIN emplois_chercheurs ec ON ec.emploi = e.id
-     LEFT JOIN corps_chercheurs cc ON cc.id = ec.corps
-     LEFT JOIN grades gc ON gc.id = ec.grade
-     LEFT JOIN emplois_enseignants_chercheurs eec ON eec.emploi = e.id
-     LEFT JOIN corps_enseignants_chercheurs cec ON cec.id = eec.corps
-     LEFT JOIN grades ge ON ge.id = eec.grade
-     LEFT JOIN emplois_biatss eb ON eb.emploi = e.id
-     LEFT JOIN corps_biatss cb ON cb.id = eb.corps
-     LEFT JOIN grades gb ON gb.id = eb.grade
-     LEFT JOIN emplois_cdd cdd ON cdd.emploi = e.id
-     LEFT JOIN fin_emplois fe ON fe.emploi = e.id
-     LEFT JOIN emplois_doctoraux edoc ON edoc.emploi = e.id
-     LEFT JOIN ecoles_doctorales eco ON eco.id = edoc.ecole_doctorale
-     LEFT JOIN categories_financements_theses cft
-       ON cft.id = edoc.categorie_financement_these
-     LEFT JOIN etablissements master ON master.id = edoc.etablissement_master
+     ${joins.join("\n     ")}
      WHERE e.personne = $1
        AND e.id = $2`,
     [personneId, emploiId]
@@ -149,12 +428,32 @@ async function fetchEmploymentById(client, personneId, emploiId) {
 }
 
 async function detectEmploymentType(client, emploiId) {
+  const includeCdd = await hasEmploisCddTable(client);
+  const doctoralConfig = await getDoctoralColumnConfig(client);
+  const includeDoctoral = doctoralConfig.exists;
+  const postdocConfig = await getPostdocColumnConfig(client);
+  const includePostdoc = postdocConfig.exists;
+  const stageConfig = await getStageColumnConfig(client);
+  const includeStage = stageConfig.exists;
+
+  const selectParts = [
+    "EXISTS (SELECT 1 FROM emplois_chercheurs WHERE emploi = $1) AS is_chercheur",
+    "EXISTS (SELECT 1 FROM emplois_enseignants_chercheurs WHERE emploi = $1) AS is_enseignant",
+    "EXISTS (SELECT 1 FROM emplois_biatss WHERE emploi = $1) AS is_biatss",
+    `${includeCdd ? "EXISTS (SELECT 1 FROM emplois_cdd WHERE emploi = $1)" : "FALSE"} AS is_cdd`,
+    `${includeDoctoral ? "EXISTS (SELECT 1 FROM emplois_doctoraux WHERE emploi = $1)" : "FALSE"} AS is_doctorant`,
+    `${includePostdoc ? "EXISTS (SELECT 1 FROM emplois_postdoctoraux WHERE emploi = $1)" : "FALSE"} AS is_postdoc`,
+    `${includeStage ? "EXISTS (SELECT 1 FROM emplois_stage WHERE emploi = $1)" : "FALSE"} AS is_stage`,
+    "EXISTS (SELECT 1 FROM emplois_autres WHERE emploi = $1) AS is_autre",
+    "te.type_emploi",
+  ];
+
   const { rows } = await client.query(
     `SELECT
-       EXISTS (SELECT 1 FROM emplois_chercheurs WHERE emploi = $1) AS is_chercheur,
-       EXISTS (SELECT 1 FROM emplois_enseignants_chercheurs WHERE emploi = $1) AS is_enseignant,
-       EXISTS (SELECT 1 FROM emplois_biatss WHERE emploi = $1) AS is_biatss,
-       EXISTS (SELECT 1 FROM emplois_cdd WHERE emploi = $1) AS is_cdd`,
+       ${selectParts.join(",\n       ")}
+     FROM emplois e
+     LEFT JOIN types_emplois te ON te.id = e.type_emploi
+     WHERE e.id = $1`,
     [emploiId]
   );
   if (!rows.length) {
@@ -164,7 +463,17 @@ async function detectEmploymentType(client, emploiId) {
   if (row.is_chercheur) return "chercheur";
   if (row.is_enseignant) return "enseignant-chercheur";
   if (row.is_biatss) return "biatss";
+  if (row.is_doctorant) return "doctorant";
+  if (row.is_postdoc) return "postdoc";
+  if (row.is_stage) return "stage";
   if (row.is_cdd) return "cdd";
+  if (row.is_autre) return "autre";
+  if (
+    typeof row.type_emploi === "string" &&
+    row.type_emploi.trim().toLowerCase() === "cdd"
+  ) {
+    return "cdd";
+  }
   return "autre";
 }
 
@@ -179,16 +488,36 @@ async function clearEmploymentSpecializations(client, emploiId) {
   await client.query("DELETE FROM emplois_biatss WHERE emploi = $1", [
     emploiId,
   ]);
-  await client.query("DELETE FROM emplois_cdd WHERE emploi = $1", [emploiId]);
+  if (await hasEmploisCddTable(client)) {
+    await client.query("DELETE FROM emplois_cdd WHERE emploi = $1", [emploiId]);
+  }
+  if ((await getDoctoralColumnConfig(client)).exists) {
+    await client.query("DELETE FROM emplois_doctoraux WHERE emploi = $1", [
+      emploiId,
+    ]);
+  }
+  if ((await getPostdocColumnConfig(client)).exists) {
+    await client.query("DELETE FROM emplois_postdoctoraux WHERE emploi = $1", [
+      emploiId,
+    ]);
+  }
+  if ((await getStageColumnConfig(client)).exists) {
+    await client.query("DELETE FROM emplois_stage WHERE emploi = $1", [
+      emploiId,
+    ]);
+  }
 }
 
 async function attachEmploymentSpecialization(
   client,
   type,
   emploiId,
-  corpsId,
-  gradeId,
-  dureeMois
+  {
+    corpsId = null,
+    gradeId = null,
+    dureeMois = null,
+    organismeFinancement = null,
+  } = {}
 ) {
   switch (type) {
     case "chercheur":
@@ -213,12 +542,54 @@ async function attachEmploymentSpecialization(
       );
       break;
     case "cdd":
-      await client.query(
-        `INSERT INTO emplois_cdd (emploi, duree_mois)
-         VALUES ($1, $2)`,
-        [emploiId, dureeMois]
-      );
+      if (await hasEmploisCddTable(client)) {
+        await client.query(
+          `INSERT INTO emplois_cdd (emploi, duree_mois)
+           VALUES ($1, $2)`,
+          [emploiId, dureeMois]
+        );
+      }
       break;
+    case "postdoc": {
+      const config = await getPostdocColumnConfig(client);
+      if (!config.exists) {
+        break;
+      }
+      if (config.columns.has("organisme_financeur")) {
+        await client.query(
+          `INSERT INTO emplois_postdoctoraux (emploi, organisme_financeur)
+           VALUES ($1, $2)`,
+          [emploiId, organismeFinancement || null]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO emplois_postdoctoraux (emploi)
+           VALUES ($1)`,
+          [emploiId]
+        );
+      }
+      break;
+    }
+    case "stage": {
+      const config = await getStageColumnConfig(client);
+      if (!config.exists) {
+        break;
+      }
+      if (config.columns.has("duree_mois") && typeof dureeMois === "number") {
+        await client.query(
+          `INSERT INTO emplois_stage (emploi, duree_mois)
+           VALUES ($1, $2)`,
+          [emploiId, dureeMois]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO emplois_stage (emploi)
+           VALUES ($1)`,
+          [emploiId]
+        );
+      }
+      break;
+    }
     default:
       break;
   }
@@ -228,9 +599,12 @@ async function updateEmploymentSpecialization(
   client,
   type,
   emploiId,
-  corpsId,
-  gradeId,
-  dureeMois
+  {
+    corpsId = null,
+    gradeId = null,
+    dureeMois = null,
+    organismeFinancement = undefined,
+  } = {}
 ) {
   switch (type) {
     case "chercheur": {
@@ -303,13 +677,35 @@ async function updateEmploymentSpecialization(
       break;
     }
     case "cdd":
-      if (typeof dureeMois === "number") {
+      if (await hasEmploisCddTable(client) && typeof dureeMois === "number") {
         await client.query(
           `UPDATE emplois_cdd SET duree_mois = $1 WHERE emploi = $2`,
           [dureeMois, emploiId]
         );
       }
       break;
+    case "postdoc": {
+      const config = await getPostdocColumnConfig(client);
+      if (config.exists && config.columns.has("organisme_financeur") && organismeFinancement !== undefined) {
+        await client.query(
+          `UPDATE emplois_postdoctoraux
+           SET organisme_financeur = $1
+           WHERE emploi = $2`,
+          [organismeFinancement || null, emploiId]
+        );
+      }
+      break;
+    }
+    case "stage": {
+      const config = await getStageColumnConfig(client);
+      if (config.exists && config.columns.has("duree_mois") && typeof dureeMois === "number") {
+        await client.query(
+          `UPDATE emplois_stage SET duree_mois = $1 WHERE emploi = $2`,
+          [dureeMois, emploiId]
+        );
+      }
+      break;
+    }
     default:
       break;
   }
@@ -323,8 +719,8 @@ function requiresGrade(type) {
   return type === "chercheur" || type === "enseignant-chercheur" || type === "biatss";
 }
 
-function requiresDuration(type) {
-  return type === "cdd";
+function requiresDuration(type, hasCdd = true) {
+  return (type === "cdd" && hasCdd) || type === "stage";
 }
 
 function parseInteger(value, field) {
@@ -618,6 +1014,7 @@ function createPersonnesRouter(pool) {
       corps,
       grade,
       duree_mois: dureeMois,
+      organisme_financeur: organismeFinancement,
     } = req.body || {};
 
     if (!isISODate(dateDebut)) {
@@ -630,6 +1027,8 @@ function createPersonnesRouter(pool) {
     if (!EMPLOYMENT_TYPES.has(typeNormalized)) {
       return res.status(400).json({ error: "Invalid employment type" });
     }
+
+    const cddTableExists = await hasEmploisCddTable(pool);
 
     let etabId;
     try {
@@ -659,7 +1058,11 @@ function createPersonnesRouter(pool) {
     }
 
     let duree = null;
-    if (requiresDuration(typeNormalized)) {
+    const requiresDurationField = requiresDuration(
+      typeNormalized,
+      cddTableExists
+    );
+    if (requiresDurationField) {
       try {
         duree = parseInteger(dureeMois, "duree_mois");
       } catch (error) {
@@ -671,6 +1074,17 @@ function createPersonnesRouter(pool) {
           .json({ error: "Field 'duree_mois' must be greater than 0" });
       }
     }
+
+    const organismeValue =
+      organismeFinancement === undefined
+        ? undefined
+        : (() => {
+            if (organismeFinancement === null) {
+              return null;
+            }
+            const text = String(organismeFinancement).trim();
+            return text.length ? text : null;
+          })();
 
     const client = await pool.connect();
     try {
@@ -689,9 +1103,12 @@ function createPersonnesRouter(pool) {
         client,
         typeNormalized,
         emploiId,
-        corpsId,
-        gradeId,
-        duree
+        {
+          corpsId,
+          gradeId,
+          dureeMois: duree,
+          organismeFinancement: organismeValue,
+        }
       );
 
       await client.query("COMMIT");
@@ -719,6 +1136,7 @@ function createPersonnesRouter(pool) {
       corps,
       grade,
       duree_mois: dureeMois,
+      organisme_financeur: organismeFinancement,
     } = req.body || {};
 
     if (
@@ -727,7 +1145,8 @@ function createPersonnesRouter(pool) {
       etablissement === undefined &&
       corps === undefined &&
       grade === undefined &&
-      dureeMois === undefined
+      dureeMois === undefined &&
+      organismeFinancement === undefined
     ) {
       return res.status(400).json({ error: "No fields provided to update" });
     }
@@ -790,6 +1209,8 @@ function createPersonnesRouter(pool) {
         return res.status(400).json({ error: "Invalid employment type" });
       }
 
+      const cddTableExists = await hasEmploisCddTable(client);
+
       let corpsId =
         corps === undefined || corps === null || corps === ""
           ? null
@@ -802,6 +1223,16 @@ function createPersonnesRouter(pool) {
         dureeMois === undefined || dureeMois === null || dureeMois === ""
           ? null
           : Number.parseInt(dureeMois, 10);
+      const organismeValue =
+        organismeFinancement === undefined
+          ? undefined
+          : (() => {
+              if (organismeFinancement === null) {
+                return null;
+              }
+              const text = String(organismeFinancement).trim();
+              return text.length ? text : null;
+            })();
 
       if (requiresCorps(nextType) && corps !== undefined && !Number.isInteger(corpsId)) {
         await client.query("ROLLBACK");
@@ -815,7 +1246,7 @@ function createPersonnesRouter(pool) {
           .status(400)
           .json({ error: "Field 'grade' must be a valid integer" });
       }
-      if (requiresDuration(nextType) && dureeMois !== undefined) {
+      if (requiresDuration(nextType, cddTableExists) && dureeMois !== undefined) {
         if (!Number.isInteger(duree) || duree <= 0) {
           await client.query("ROLLBACK");
           return res
@@ -842,31 +1273,37 @@ function createPersonnesRouter(pool) {
               error: "Field 'grade' is required for the selected employment type",
             });
         }
-        if (requiresDuration(nextType) && !Number.isInteger(duree)) {
+        if (requiresDuration(nextType, cddTableExists) && !Number.isInteger(duree)) {
           await client.query("ROLLBACK");
           return res
             .status(400)
             .json({
               error:
-                "Field 'duree_mois' must be provided and greater than 0 for CDD employments",
+                "Field 'duree_mois' must be provided and greater than 0 for this employment type",
             });
         }
         await attachEmploymentSpecialization(
           client,
           nextType,
           emploiId,
-          corpsId,
-          gradeId,
-          duree
+          {
+            corpsId,
+            gradeId,
+            dureeMois: duree,
+            organismeFinancement: organismeValue,
+          }
         );
       } else {
         await updateEmploymentSpecialization(
           client,
           currentType,
           emploiId,
-          corpsId,
-          gradeId,
-          duree
+          {
+            corpsId,
+            gradeId,
+            dureeMois: duree,
+            organismeFinancement: organismeValue,
+          }
         );
       }
 

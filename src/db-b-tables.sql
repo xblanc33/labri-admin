@@ -171,15 +171,12 @@ CREATE TABLE ecoles_doctorales (
 CREATE TABLE emplois_doctoraux (
     id SERIAL PRIMARY KEY,
     emploi INTEGER NOT NULL REFERENCES emplois(id),
-    ecole_doctorale INTEGER NOT NULL REFERENCES ecoles_doctorales(id),
-    categorie_financement_these INTEGER REFERENCES categories_financements_theses(id),
-    etablissement_master INTEGER REFERENCES etablissements(id)
+    categorie_financement_these INTEGER REFERENCES categories_financements_theses(id)
 );
 
 CREATE TABLE emplois_postdoctoraux (
     id SERIAL PRIMARY KEY,
-    emploi INTEGER NOT NULL REFERENCES emplois(id),
-    organisme_financeur VARCHAR(100)
+    emploi INTEGER NOT NULL REFERENCES emplois(id)
 );
 
 
@@ -210,7 +207,7 @@ CREATE TABLE fin_emeritats (
     date_fin DATE NOT NULL
 );
 
-CREATE TABLE hdr (
+CREATE TABLE hdrs (
     id SERIAL PRIMARY KEY,
     date_obtention DATE NOT NULL,
     personne INTEGER NOT NULL REFERENCES personnes(id)
@@ -222,6 +219,7 @@ CREATE TABLE theses (
     titre VARCHAR(200) NOT NULL,
     debut DATE NOT NULL,
     ecole_doctorale INTEGER NOT NULL REFERENCES ecoles_doctorales(id),
+    etablissement_master INTEGER REFERENCES etablissements(id),
     personne INTEGER NOT NULL REFERENCES personnes(id)
 );
 
